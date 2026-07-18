@@ -76,13 +76,49 @@ def create_news_table():
     """
     with db_cursor(commit=True) as cursor:
         cursor.execute(sql)
+        ensure_news_id_column(cursor)
         cursor.execute("ALTER TABLE news ADD COLUMN IF NOT EXISTS img TEXT;")
 
 
+def ensure_news_id_column(cursor):
+    cursor.execute("ALTER TABLE news ADD COLUMN IF NOT EXISTS id INTEGER;")
+    cursor.execute("CREATE SEQUENCE IF NOT EXISTS news_id_seq;")
+    cursor.execute("ALTER SEQUENCE news_id_seq OWNED BY news.id;")
+    cursor.execute("ALTER TABLE news ALTER COLUMN id SET DEFAULT nextval('news_id_seq');")
+    cursor.execute(
+        """
+        SELECT setval(
+            'news_id_seq',
+            GREATEST(COALESCE(MAX(id), 0), 1),
+            COALESCE(MAX(id), 0) > 0
+        )
+        FROM news;
+        """
+    )
+    cursor.execute("UPDATE news SET id = nextval('news_id_seq') WHERE id IS NULL;")
+    cursor.execute("ALTER TABLE news ALTER COLUMN id SET NOT NULL;")
+    cursor.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conrelid = 'news'::regclass
+                  AND contype = 'p'
+            ) THEN
+                ALTER TABLE news ADD PRIMARY KEY (id);
+            END IF;
+        END $$;
+        """
+    )
+
+
 def clear_news_table():
-    create_news_table()
     with db_cursor(commit=True) as cursor:
-        cursor.execute("TRUNCATE TABLE news RESTART IDENTITY;")
+        cursor.execute("DROP TABLE IF EXISTS news CASCADE;")
+        cursor.execute("DROP SEQUENCE IF EXISTS news_id_seq;")
+    create_news_table()
 
 
 def load_news_from_json(json_path="out.json"):

@@ -98,6 +98,8 @@ def fetch_soup(url):
 
 
 def clear_output_state(json_path='out.json', image_dir='images'):
+    clear_errors = []
+
     Path(json_path).unlink(missing_ok=True)
 
     image_path = Path(image_dir)
@@ -113,6 +115,7 @@ def clear_output_state(json_path='out.json', image_dir='images'):
 
         clear_news_table()
     except Exception as e:
+        clear_errors.append(f'PostgreSQL table news: {e}')
         print(f'Failed to clear PostgreSQL table news: {e}', file=sys.stderr)
     else:
         print('Cleared PostgreSQL table news')
@@ -122,12 +125,16 @@ def clear_output_state(json_path='out.json', image_dir='images'):
 
         deleted_minio_images = clear_bucket(verbose=True)
     except Exception as e:
+        clear_errors.append(f'MinIO bucket img: {e}')
         print(f'Failed to clear MinIO bucket img: {e}', file=sys.stderr)
     else:
         print(f'Cleared MinIO bucket img: {deleted_minio_images} objects')
 
     print(f'Cleared JSON: {json_path}')
     print(f'Cleared images: {deleted_images} files')
+
+    if clear_errors:
+        raise RuntimeError('Failed to clear old data before scraping: ' + '; '.join(clear_errors))
 
 
 def get_image_extension(image_url):
