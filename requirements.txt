@@ -1,0 +1,5 @@
+beautifulsoup4
+minio
+psycopg2-binary
+requests
+urllib3<2

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT_DIR"
+
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+STATUS=0
+
+run_check() {
+  local name="$1"
+  local log_file
+  log_file="$(mktemp "${TMPDIR:-/tmp}/${name}.XXXXXX.log")"
+
+  echo "Checking ${name}..."
+  if "$PYTHON_BIN" - "$name" >"$log_file" 2>&1 <<'PY'
+import sys
+
+check_name = sys.argv[1]
+
+if check_name == "postgres":
+    import db
+
+    kwargs = db._connection_kwargs()
+    safe_kwargs = {key: value for key, value in kwargs.items() if key != "password"}
+    print(f"PostgreSQL config: {safe_kwargs}")
+
+    result = db.test_connection()
+    print(f"PostgreSQL connected: {result['version']}")
+
+elif check_name == "minio":
+    from minio_client import MINIO_BUCKET, MINIO_ENDPOINT, _get_minio_client
+
+    client = _get_minio_client()
+    bucket_exists = client.bucket_exists(MINIO_BUCKET)
+    print(f"MinIO endpoint: {MINIO_ENDPOINT}")
+    print(f"MinIO bucket: {MINIO_BUCKET}")
+    print(f"MinIO connected: bucket_exists={bucket_exists}")
+
+else:
+    raise ValueError(f"Unknown check: {check_name}")
+PY
+  then
+    cat "$log_file"
+    echo "${name}: OK"
+  else
+    local exit_code=$?
+    STATUS=1
+    echo "ERROR: ${name} check failed with exit code ${exit_code}" >&2
+    echo "----- ${name} output -----" >&2
+    cat "$log_file" >&2
+    echo "--------------------------" >&2
+  fi
+
+  rm -f "$log_file"
+}
+
+run_check postgres
+run_check minio
+
+if [[ "$STATUS" -eq 0 ]]; then
+  echo "Database checks completed successfully."
+else
+  echo "ERROR: One or more database checks failed." >&2
+fi
+
+exit "$STATUS"
