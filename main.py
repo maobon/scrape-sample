@@ -21,7 +21,12 @@ parser.add_argument('--selector', help='CSS selector to select article items (ov
 # paginate default set to True
 parser.add_argument('--paginate', help='Auto follow pagination to collect multiple pages (uses ?page=N)', action='store_true', default=True)
 parser.add_argument('--max-pages', help='Maximum number of pages to fetch when paginating', type=int, default=10)
-parser.add_argument('--per-page', help='Target number of articles to collect per page (after filtering)', type=int, default=10)
+parser.add_argument(
+    '--per-page',
+    help='Minimum number of strict articles to collect before trying relaxed extraction',
+    type=int,
+    default=10,
+)
 parser.add_argument('--limit', help='Max number of results to print (0 = all)', type=int, default=0)
 parser.add_argument('--json', help='Save output to JSON file path', default='out.json')
 parser.add_argument('--no-paginate', help='Disable automatic pagination', action='store_true')
@@ -248,8 +253,7 @@ def get_img_src(img):
     return None
 
 
-# only block by URL substrings (high-confidence) or by explicit data-testid values
-URL_BLACKLIST_SUBSTR = ['/live/', '/video/', '/interactive/']
+URL_BLACKLIST_SUBSTR = []
 DATA_TESTID_EXACT = {'live', 'video', 'interactive', 'load-more-posts', 'load-more'}
 
 
@@ -280,9 +284,10 @@ def is_unwanted_strict(title, href, item):
             return True
 
     # 3) exact-title phrases
-    t = title.lower().strip().rstrip('.')
-    for sub in TITLE_BLACKLIST:
-        if sub in t:
+    normalized_title = title.lower().strip().rstrip('.')
+    normalized_blacklist = [item.lower().strip().rstrip('.') for item in TITLE_BLACKLIST]
+    for sub in normalized_blacklist:
+        if sub in normalized_title:
             return True
 
     return False
@@ -313,6 +318,15 @@ def extract_from_item(item, base_url, strict=True):
     # Title: prefer the header element's text when available
     title = title_el.get_text(' ', strip=True) if title_el else (a.get('aria-label') or a.get('title') or a.get_text(' ', strip=True))
     if not title:
+        return None
+
+    href_l = (href or '').lower()
+    if any(sub in href_l for sub in URL_BLACKLIST_SUBSTR):
+        return None
+
+    normalized_title = title.lower().strip().rstrip('.')
+    normalized_blacklist = [item.lower().strip().rstrip('.') for item in TITLE_BLACKLIST]
+    if any(sub in normalized_title for sub in normalized_blacklist):
         return None
 
     if strict and is_unwanted_strict(title, href, item):
@@ -384,6 +398,40 @@ clear_output_state(args.json)
 results = []
 seen_urls = set()
 
+
+def add_result(data):
+    if not data or data['url'] in seen_urls:
+        return False
+
+    seen_urls.add(data['url'])
+    results.append(data)
+    return True
+
+
+def reached_limit():
+    return bool(args.limit and len(results) >= args.limit)
+
+
+def collect_from_candidates(candidates, page_url):
+    page_count = 0
+
+    for el in candidates:
+        if reached_limit():
+            break
+        data = extract_from_item(el, base_url=page_url, strict=True)
+        if add_result(data):
+            page_count += 1
+
+    if page_count < args.per_page and not reached_limit():
+        for el in candidates:
+            if reached_limit() or page_count >= args.per_page:
+                break
+            data = extract_from_item(el, base_url=page_url, strict=False)
+            if add_result(data):
+                page_count += 1
+
+    return page_count
+
 if args.paginate:
     for page in range(1, args.max_pages + 1):
         if page == 1:
@@ -415,40 +463,10 @@ if args.paginate:
                 candidates.append(el)
                 added.add(k)
 
-        collected = 0
-        # Pass 1: strict extraction
-        for el in candidates:
-            if collected >= args.per_page:
-                break
-            data = extract_from_item(el, base_url=page_url, strict=True)
-            if not data:
-                continue
-            if data['url'] in seen_urls:
-                continue
-            seen_urls.add(data['url'])
-            results.append(data)
-            collected += 1
-            if args.limit and len(results) >= args.limit:
-                break
-
-        # Pass 2: relaxed extraction to fill quota if needed
-        if collected < args.per_page:
-            for el in candidates:
-                if collected >= args.per_page:
-                    break
-                data = extract_from_item(el, base_url=page_url, strict=False)
-                if not data:
-                    continue
-                if data['url'] in seen_urls:
-                    continue
-                seen_urls.add(data['url'])
-                results.append(data)
-                collected += 1
-                if args.limit and len(results) >= args.limit:
-                    break
+        collected = collect_from_candidates(candidates, page_url)
 
         print(f'Page {page}: collected {collected} items')
-        if args.limit and len(results) >= args.limit:
+        if reached_limit():
             break
         time.sleep(0.5)
 else:
@@ -460,16 +478,7 @@ else:
     candidates = soup.select(ITEM_SELECTOR) if ITEM_SELECTOR else []
     if not candidates:
         candidates = soup.select(', '.join(FALLBACK_SELECTORS))
-    for el in candidates:
-        data = extract_from_item(el, base_url=TARGET_URL)
-        if not data:
-            continue
-        if data['url'] in seen_urls:
-            continue
-        seen_urls.add(data['url'])
-        results.append(data)
-        if args.limit and len(results) >= args.limit:
-            break
+    collect_from_candidates(candidates, TARGET_URL)
 
 # Output and optional save
 if args.render_dates:
