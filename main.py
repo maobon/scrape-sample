@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import time
 
@@ -265,15 +266,23 @@ def get_img_src(img):
 
 
 URL_BLACKLIST_SUBSTR = []
-DATA_TESTID_EXACT = {'live', 'video', 'interactive', 'load-more-posts', 'load-more'}
+DATA_TESTID_EXACT = {'live', 'interactive', 'load-more-posts', 'load-more'}
+
+
+def is_supported_story_url(url):
+    parsed = urlparse(url)
+    return bool(
+        re.search(r"/\d{4}/", parsed.path)
+        or parsed.path.startswith("/video/")
+    )
 
 
 def is_unwanted_strict(title, href, item):
     """Return True only for high-confidence non-article items.
 
     Heuristics (in priority):
-    1. href contains a disallowed path (/live/, /video/, /interactive/) -> block
-    2. element has a data-testid whose value exactly matches known non-article tokens -> block
+    1. href contains a disallowed path -> block
+    2. element has a data-testid whose value exactly matches known non-story tokens -> block
     3. exact-title matches (small set) -> block
 
     Avoid using loose class-name or substring matches to reduce false positives.
@@ -303,9 +312,6 @@ def is_unwanted_strict(title, href, item):
 
     return False
 
-
-import re
-
 def extract_from_item(item, base_url, strict=True):
     # Prefer the anchor that contains the article title (h2/h3).
     title_el = item.select_one('h2, h3')
@@ -322,8 +328,7 @@ def extract_from_item(item, base_url, strict=True):
         return None
     full = urljoin(base_url, href)
 
-    # Reject non-article links: require a year segment like /2026/ in the URL for article pages
-    if not re.search(r"/\d{4}/", full):
+    if not is_supported_story_url(full):
         return None
 
     # Title: prefer the header element's text when available

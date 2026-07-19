@@ -8,6 +8,7 @@ from config_loader import get_config_section
 
 try:
     import psycopg2
+    from psycopg2 import errorcodes
     from psycopg2 import sql
     from psycopg2.extras import RealDictCursor, execute_values
 except ImportError as exc:
@@ -22,33 +23,60 @@ def _connection_kwargs():
     if database_url:
         parsed = urlparse(database_url)
         return {
-            "host": parsed.hostname,
-            "port": parsed.port or 5432,
-            "dbname": parsed.path.lstrip("/"),
-            "user": parsed.username,
-            "password": parsed.password,
+            "host": parsed.hostname or os.getenv("PGHOST") or config.get("host", "localhost"),
+            "port": parsed.port or int(os.getenv("PGPORT") or config.get("port", 5432)),
+            "dbname": parsed.path.lstrip("/") or os.getenv("PGDATABASE") or config.get("database", "myapp"),
+            "user": parsed.username or os.getenv("PGUSER") or config.get("user", "postgres"),
+            "password": parsed.password if parsed.password is not None else os.getenv("PGPASSWORD") or config.get("password", ""),
         }
 
     return {
         "host": os.getenv("PGHOST") or config.get("host", "localhost"),
         "port": int(os.getenv("PGPORT") or config.get("port", 5432)),
         "dbname": os.getenv("PGDATABASE") or config.get("database", "myapp"),
-        "user": os.getenv("PGUSER") or config.get("user", "xinyi"),
+        "user": os.getenv("PGUSER") or config.get("user", "postgres"),
         "password": os.getenv("PGPASSWORD") or config.get("password", ""),
     }
 
 
-def get_connection():
+def _format_connection_target(kwargs):
+    return (
+        f"{kwargs.get('user') or '<default-user>'}@"
+        f"{kwargs.get('host') or '<default-host>'}:"
+        f"{kwargs.get('port') or 5432}/"
+        f"{kwargs.get('dbname') or '<default-db>'}"
+    )
+
+
+def _quote_identifier(value):
+    return '"' + str(value).replace('"', '""') + '"'
+
+
+def _create_database_hint(database_name):
+    return (
+        "Run as a PostgreSQL admin if automatic creation is not permitted: "
+        f"sudo -iu postgres psql -c 'CREATE DATABASE {_quote_identifier(database_name)};'"
+    )
+
+
+def _is_missing_database_error(exc):
+    message = str(exc).lower()
+    return (
+        getattr(exc, "pgcode", None) == errorcodes.INVALID_CATALOG_NAME
+        or ("database" in message and "does not exist" in message)
+    )
+
+
+def get_connection(auto_init=True):
     kwargs = _connection_kwargs()
     try:
         return psycopg2.connect(**kwargs)
     except psycopg2.OperationalError as exc:
-        target = (
-            f"{kwargs.get('user') or '<default-user>'}@"
-            f"{kwargs.get('host') or '<default-host>'}:"
-            f"{kwargs.get('port') or 5432}/"
-            f"{kwargs.get('dbname') or '<default-db>'}"
-        )
+        if auto_init and _is_missing_database_error(exc):
+            ensure_database_exists()
+            return get_connection(auto_init=False)
+
+        target = _format_connection_target(kwargs)
         raise RuntimeError(
             "Cannot connect to PostgreSQL "
             f"({target}). Check config.json postgres settings or DATABASE_URL/PG* "
@@ -124,13 +152,20 @@ def ensure_database_exists():
                 "created": True,
                 "maintenance_database": maintenance_database,
             }
+    except psycopg2.Error as exc:
+        raise RuntimeError(
+            f"PostgreSQL database {target_database!r} does not exist and could not "
+            "be created automatically. The configured PostgreSQL user must have "
+            f"CREATEDB permission. {_create_database_hint(target_database)} "
+            f"Original error: {exc}"
+        ) from exc
     finally:
         connection.close()
 
 
 def init_database():
     database_result = ensure_database_exists()
-    create_news_table()
+    create_news_table(ensure_database=False)
     return database_result
 
 
@@ -155,7 +190,10 @@ def test_connection():
         return cursor.fetchone()
 
 
-def create_news_table():
+def create_news_table(ensure_database=True):
+    if ensure_database:
+        ensure_database_exists()
+
     sql = """
     CREATE TABLE IF NOT EXISTS news (
         id SERIAL PRIMARY KEY,
