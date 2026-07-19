@@ -31,6 +31,8 @@ parser.add_argument('--limit', help='Max number of results to print (0 = all)', 
 parser.add_argument('--json', help='Save output to JSON file path', default='out.json')
 parser.add_argument('--no-paginate', help='Disable automatic pagination', action='store_true')
 parser.add_argument('--render-dates', help='Use Playwright to render article pages and extract publish dates', action='store_true', default=False)
+parser.add_argument('--clear-database', help='Clear PostgreSQL before scraping (disabled by default for production safety)', action='store_true')
+parser.add_argument('--clear-minio', help='Clear MinIO bucket before scraping (disabled by default for production safety)', action='store_true')
 args = parser.parse_args()
 
 # respect --no-paginate
@@ -97,7 +99,7 @@ def fetch_soup(url):
     return BeautifulSoup(resp.text, 'html.parser')
 
 
-def clear_output_state(json_path='out.json', image_dir='images'):
+def clear_output_state(json_path='out.json', image_dir='images', clear_database=False, clear_minio=False):
     clear_errors = []
 
     Path(json_path).unlink(missing_ok=True)
@@ -110,25 +112,27 @@ def clear_output_state(json_path='out.json', image_dir='images'):
             path.unlink()
             deleted_images += 1
 
-    try:
-        from db import clear_news_table
+    if clear_database:
+        try:
+            from db import clear_news_table
 
-        clear_news_table()
-    except Exception as e:
-        clear_errors.append(f'PostgreSQL table news: {e}')
-        print(f'Failed to clear PostgreSQL table news: {e}', file=sys.stderr)
-    else:
-        print('Cleared PostgreSQL table news')
+            clear_news_table()
+        except Exception as e:
+            clear_errors.append(f'PostgreSQL table news: {e}')
+            print(f'Failed to clear PostgreSQL table news: {e}', file=sys.stderr)
+        else:
+            print('Cleared PostgreSQL table news')
 
-    try:
-        from minio_client import clear_bucket
+    if clear_minio:
+        try:
+            from minio_client import clear_bucket
 
-        deleted_minio_images = clear_bucket(verbose=True)
-    except Exception as e:
-        clear_errors.append(f'MinIO bucket img: {e}')
-        print(f'Failed to clear MinIO bucket img: {e}', file=sys.stderr)
-    else:
-        print(f'Cleared MinIO bucket img: {deleted_minio_images} objects')
+            deleted_minio_images = clear_bucket(verbose=True)
+        except Exception as e:
+            clear_errors.append(f'MinIO bucket img: {e}')
+            print(f'Failed to clear MinIO bucket img: {e}', file=sys.stderr)
+        else:
+            print(f'Cleared MinIO bucket img: {deleted_minio_images} objects')
 
     print(f'Cleared JSON: {json_path}')
     print(f'Cleared images: {deleted_images} files')
@@ -400,7 +404,7 @@ def get_published_from_article(url):
             continue
     return None
 
-clear_output_state(args.json)
+clear_output_state(args.json, clear_database=args.clear_database, clear_minio=args.clear_minio)
 
 results = []
 seen_urls = set()
@@ -564,18 +568,21 @@ if args.render_dates:
 
 add_local_img_urls(results)
 
-try:
-    from db import replace_news
+if results:
+    try:
+        from db import replace_news
 
-    print(f"[DB DEBUG] Preparing to save {len(results)} articles to PostgreSQL...")
-    db_result = replace_news(results)
-    print("[DB DEBUG] Database operation executed successfully.")
-    for item, row in zip(results, db_result["rows"]):
-        item["id"] = row["id"]
-        print(f"[DB DEBUG] Saved row id={row['id']} url={row['url']}")
-    print(f"Saved to PostgreSQL table news: {db_result['count']} rows")
-except Exception as e:
-    print(f'Failed to save to PostgreSQL: {e}', file=sys.stderr)
+        print(f"[DB DEBUG] Preparing to save {len(results)} articles to PostgreSQL...")
+        db_result = replace_news(results)
+        print("[DB DEBUG] Database operation executed successfully.")
+        for item, row in zip(results, db_result["rows"]):
+            item["id"] = row["id"]
+            print(f"[DB DEBUG] Saved row id={row['id']} url={row['url']}")
+        print(f"Saved to PostgreSQL table news: {db_result['count']} rows")
+    except Exception as e:
+        print(f'Failed to save to PostgreSQL: {e}', file=sys.stderr)
+else:
+    print('Skipped PostgreSQL update: no articles collected; existing rows were left unchanged', file=sys.stderr)
 
 if args.json:
     with open(args.json, 'w', encoding='utf-8') as f:

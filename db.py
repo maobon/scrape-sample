@@ -38,7 +38,22 @@ def _connection_kwargs():
 
 
 def get_connection():
-    return psycopg2.connect(**_connection_kwargs())
+    kwargs = _connection_kwargs()
+    try:
+        return psycopg2.connect(**kwargs)
+    except psycopg2.OperationalError as exc:
+        target = (
+            f"{kwargs.get('user') or '<default-user>'}@"
+            f"{kwargs.get('host') or '<default-host>'}:"
+            f"{kwargs.get('port') or 5432}/"
+            f"{kwargs.get('dbname') or '<default-db>'}"
+        )
+        raise RuntimeError(
+            "Cannot connect to PostgreSQL "
+            f"({target}). Check config.json postgres settings or DATABASE_URL/PG* "
+            "environment variables, and make sure the database exists. "
+            f"Original error: {exc}"
+        ) from exc
 
 
 @contextmanager
@@ -115,10 +130,9 @@ def ensure_news_id_column(cursor):
 
 
 def clear_news_table():
-    with db_cursor(commit=True) as cursor:
-        cursor.execute("DROP TABLE IF EXISTS news CASCADE;")
-        cursor.execute("DROP SEQUENCE IF EXISTS news_id_seq;")
     create_news_table()
+    with db_cursor(commit=True) as cursor:
+        cursor.execute("TRUNCATE TABLE news RESTART IDENTITY;")
 
 
 def load_news_from_json(json_path="out.json"):
