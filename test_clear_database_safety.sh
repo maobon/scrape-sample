@@ -76,5 +76,6 @@ for round_index in range(1, rounds + 1):
 source = Path("db.py").read_text(encoding="utf-8").lower()
 assert "drop database" not in source, "db.py must never contain DROP DATABASE"
 assert "drop table" not in source, "db.py must not drop tables during clear"
+assert "create table if not exists news" in source, "news table creation must be idempotent"
 print("Database clear safety simulation passed.")
 PY

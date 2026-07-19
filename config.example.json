@@ -13,6 +13,7 @@
     "host": "localhost",
     "port": 5432,
     "database": "myapp",
+    "maintenance_database": "postgres",
     "user": "app_user",
     "password": ""
   },

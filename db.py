@@ -8,6 +8,7 @@ from config_loader import get_config_section
 
 try:
     import psycopg2
+    from psycopg2 import sql
     from psycopg2.extras import RealDictCursor, execute_values
 except ImportError as exc:
     raise RuntimeError(
@@ -54,6 +55,83 @@ def get_connection():
             "environment variables, and make sure the database exists. "
             f"Original error: {exc}"
         ) from exc
+
+
+def _maintenance_database_names(target_database):
+    config = get_config_section("postgres")
+    configured_name = (
+        os.getenv("PGMAINTENANCE_DATABASE")
+        or config.get("maintenance_database")
+        or "postgres"
+    )
+    names = [configured_name, "postgres", "template1"]
+    unique_names = []
+    for database_name in names:
+        if database_name and database_name not in unique_names:
+            unique_names.append(database_name)
+    if target_database in unique_names and len(unique_names) > 1:
+        unique_names.remove(target_database)
+    return unique_names
+
+
+def _connect_to_first_available_database(base_kwargs, database_names):
+    last_error = None
+    for database_name in database_names:
+        kwargs = dict(base_kwargs)
+        kwargs["dbname"] = database_name
+        try:
+            connection = psycopg2.connect(**kwargs)
+        except psycopg2.OperationalError as exc:
+            last_error = exc
+            continue
+        return connection, database_name
+
+    raise RuntimeError(
+        "Cannot connect to a PostgreSQL maintenance database. "
+        f"Tried: {', '.join(database_names)}. Original error: {last_error}"
+    )
+
+
+def ensure_database_exists():
+    target_kwargs = _connection_kwargs()
+    target_database = target_kwargs.get("dbname")
+    if not target_database:
+        raise ValueError("PostgreSQL target database name is empty")
+
+    connection, maintenance_database = _connect_to_first_available_database(
+        target_kwargs,
+        _maintenance_database_names(target_database),
+    )
+    connection.autocommit = True
+    try:
+        with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute(
+                "SELECT 1 FROM pg_database WHERE datname = %s;",
+                (target_database,),
+            )
+            if cursor.fetchone():
+                return {
+                    "database": target_database,
+                    "created": False,
+                    "maintenance_database": maintenance_database,
+                }
+
+            cursor.execute(
+                sql.SQL("CREATE DATABASE {}").format(sql.Identifier(target_database))
+            )
+            return {
+                "database": target_database,
+                "created": True,
+                "maintenance_database": maintenance_database,
+            }
+    finally:
+        connection.close()
+
+
+def init_database():
+    database_result = ensure_database_exists()
+    create_news_table()
+    return database_result
 
 
 @contextmanager
