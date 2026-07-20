@@ -7,3 +7,5 @@ __pycache__/
 config.json
 out.json
 images/
+
+.artifacts/
