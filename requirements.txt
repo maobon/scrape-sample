@@ -1,5 +1,12 @@
-beautifulsoup4
-minio
-psycopg2-binary
-requests
-urllib3<2
+# HTTP & Scraping
+httpx>=0.28.1
+beautifulsoup4>=4.15.0
+
+# Database & Storage
+psycopg2-binary>=2.9.12
+minio>=7.2.20
+
+# API Service
+fastapi>=0.128.8
+uvicorn>=0.39.0
+pydantic>=2.13.4

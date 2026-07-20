@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
-from config_loader import get_config_section
+from src.utils.config import get_config_section
 
 try:
     import psycopg2
@@ -15,7 +15,6 @@ except ImportError as exc:
     raise RuntimeError(
         "缺少 PostgreSQL 驱动，请先安装：pip install psycopg2-binary"
     ) from exc
-
 
 def _connection_kwargs():
     config = get_config_section("postgres")
@@ -38,7 +37,6 @@ def _connection_kwargs():
         "password": os.getenv("PGPASSWORD") or config.get("password", ""),
     }
 
-
 def _format_connection_target(kwargs):
     return (
         f"{kwargs.get('user') or '<default-user>'}@"
@@ -47,10 +45,8 @@ def _format_connection_target(kwargs):
         f"{kwargs.get('dbname') or '<default-db>'}"
     )
 
-
 def _quote_identifier(value):
     return '"' + str(value).replace('"', '""') + '"'
-
 
 def _create_database_hint(database_name):
     return (
@@ -58,14 +54,12 @@ def _create_database_hint(database_name):
         f"sudo -iu postgres psql -c 'CREATE DATABASE {_quote_identifier(database_name)};'"
     )
 
-
 def _is_missing_database_error(exc):
     message = str(exc).lower()
     return (
         getattr(exc, "pgcode", None) == errorcodes.INVALID_CATALOG_NAME
         or ("database" in message and "does not exist" in message)
     )
-
 
 def get_connection(auto_init=True):
     kwargs = _connection_kwargs()
@@ -84,7 +78,6 @@ def get_connection(auto_init=True):
             f"Original error: {exc}"
         ) from exc
 
-
 def _maintenance_database_names(target_database):
     config = get_config_section("postgres")
     configured_name = (
@@ -100,7 +93,6 @@ def _maintenance_database_names(target_database):
     if target_database in unique_names and len(unique_names) > 1:
         unique_names.remove(target_database)
     return unique_names
-
 
 def _connect_to_first_available_database(base_kwargs, database_names):
     last_error = None
@@ -118,7 +110,6 @@ def _connect_to_first_available_database(base_kwargs, database_names):
         "Cannot connect to a PostgreSQL maintenance database. "
         f"Tried: {', '.join(database_names)}. Original error: {last_error}"
     )
-
 
 def ensure_database_exists():
     target_kwargs = _connection_kwargs()
@@ -162,12 +153,10 @@ def ensure_database_exists():
     finally:
         connection.close()
 
-
-def init_database():
+def init_database_schema():
     database_result = ensure_database_exists()
     create_news_table(ensure_database=False)
     return database_result
-
 
 @contextmanager
 def db_cursor(commit=False):
@@ -183,18 +172,16 @@ def db_cursor(commit=False):
     finally:
         connection.close()
 
-
 def test_connection():
     with db_cursor() as cursor:
         cursor.execute("SELECT version() AS version;")
         return cursor.fetchone()
 
-
 def create_news_table(ensure_database=True):
     if ensure_database:
         ensure_database_exists()
 
-    sql = """
+    sql_stmt = """
     CREATE TABLE IF NOT EXISTS news (
         id SERIAL PRIMARY KEY,
         title TEXT NOT NULL,
@@ -206,10 +193,10 @@ def create_news_table(ensure_database=True):
     );
     """
     with db_cursor(commit=True) as cursor:
-        cursor.execute(sql)
+        cursor.execute(sql_stmt)
         ensure_news_id_column(cursor)
         cursor.execute("ALTER TABLE news ADD COLUMN IF NOT EXISTS img TEXT;")
-
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_news_date ON news (date);")
 
 def ensure_news_id_column(cursor):
     cursor.execute("ALTER TABLE news ADD COLUMN IF NOT EXISTS id INTEGER;")
@@ -244,31 +231,26 @@ def ensure_news_id_column(cursor):
         """
     )
 
-
 def clear_news_table():
     create_news_table()
     with db_cursor(commit=True) as cursor:
         cursor.execute("TRUNCATE TABLE news RESTART IDENTITY;")
 
-
-def load_news_from_json(json_path="out.json"):
-    path = Path(json_path)
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, list):
-        raise ValueError("out.json 必须是新闻列表")
-
-    return replace_news(data)
-
-
-def replace_news(data):
+def upsert_news(data):
     if not isinstance(data, list):
         raise ValueError("新闻数据必须是列表")
 
     create_news_table()
 
-    sql = """
+    sql_stmt = """
     INSERT INTO news (title, url, image, img, summary, date)
     VALUES %s
+    ON CONFLICT (url) DO UPDATE SET
+        title = EXCLUDED.title,
+        image = EXCLUDED.image,
+        img = CASE WHEN EXCLUDED.img <> '' THEN EXCLUDED.img ELSE news.img END,
+        summary = EXCLUDED.summary,
+        date = EXCLUDED.date
     RETURNING id, title, url;
     """
     rows = [
@@ -284,15 +266,10 @@ def replace_news(data):
     ]
 
     with db_cursor(commit=True) as cursor:
-        cursor.execute("TRUNCATE TABLE news RESTART IDENTITY;")
         inserted = []
         if rows:
-            inserted = execute_values(cursor, sql, rows, fetch=True)
+            inserted = execute_values(cursor, sql_stmt, rows, fetch=True)
         cursor.execute("SELECT COUNT(*) AS count FROM news;")
         result = cursor.fetchone()
         result["rows"] = inserted
         return result
-
-
-if __name__ == "__main__":
-    print(load_news_from_json())

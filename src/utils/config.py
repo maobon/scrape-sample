@@ -2,13 +2,10 @@ import json
 import os
 from pathlib import Path
 
-
 DEFAULT_CONFIG_PATH = "config.json"
-
 
 def get_config_path():
     return os.getenv("CONFIG_PATH", DEFAULT_CONFIG_PATH)
-
 
 def load_app_config(config_path=None):
     path = Path(config_path or get_config_path())
@@ -22,7 +19,6 @@ def load_app_config(config_path=None):
         raise ValueError(f"Config root must be a JSON object: {path}")
 
     return config
-
 
 def get_config_section(section, config_path=None):
     config = load_app_config(config_path)

@@ -1,8 +1,9 @@
 import os
+import logging
 from pathlib import Path
+from src.utils.config import get_config_section
 
-from config_loader import get_config_section
-
+logger = logging.getLogger(__name__)
 
 def _bool_value(value, default=False):
     if value is None:
@@ -11,11 +12,9 @@ def _bool_value(value, default=False):
         return value
     return str(value).lower() in {"1", "true", "yes"}
 
-
 _MINIO_CONFIG = get_config_section("minio")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET") or _MINIO_CONFIG.get("bucket", "img")
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT") or _MINIO_CONFIG.get("endpoint", "127.0.0.1:9000")
-
 
 def _get_minio_client():
     from minio import Minio
@@ -28,7 +27,6 @@ def _get_minio_client():
         secure=secure,
     )
 
-
 def _content_type(path):
     suffix = Path(path).suffix.lower()
     if suffix in {".jpg", ".jpeg"}:
@@ -37,14 +35,13 @@ def _content_type(path):
         return "image/png"
     return "application/octet-stream"
 
-
 def _ensure_public_bucket(client, bucket, verbose=False):
     if not client.bucket_exists(bucket):
         if verbose:
-            print(f"[MINIO] Bucket does not exist, creating: {bucket}")
+            logger.info(f"[MINIO] Bucket does not exist, creating: {bucket}")
         client.make_bucket(bucket)
     elif verbose:
-        print(f"[MINIO] Bucket exists: {bucket}")
+        logger.debug(f"[MINIO] Bucket exists: {bucket}")
 
     policy = f"""{{
       "Version": "2012-10-17",
@@ -59,14 +56,13 @@ def _ensure_public_bucket(client, bucket, verbose=False):
     }}"""
     client.set_bucket_policy(bucket, policy)
     if verbose:
-        print(f"[MINIO] Public read policy applied: {bucket}")
-
+        logger.debug(f"[MINIO] Public read policy applied: {bucket}")
 
 def upload_image(path, object_name=None, bucket=MINIO_BUCKET, verbose=False):
     object_name = object_name or Path(path).name
     client = _get_minio_client()
     if verbose:
-        print(f"[MINIO] Uploading object: bucket={bucket}, object={object_name}, file={path}")
+        logger.info(f"[MINIO] Uploading object: bucket={bucket}, object={object_name}")
     _ensure_public_bucket(client, bucket, verbose=verbose)
     client.fput_object(
         bucket,
@@ -75,27 +71,25 @@ def upload_image(path, object_name=None, bucket=MINIO_BUCKET, verbose=False):
         content_type=_content_type(path),
     )
     if verbose:
-        print(f"[MINIO] Uploaded object: bucket={bucket}, object={object_name}")
+        logger.info(f"[MINIO] Uploaded object: bucket={bucket}, object={object_name}")
     return object_name
-
 
 def clear_bucket(bucket=MINIO_BUCKET, verbose=False):
     client = _get_minio_client()
     if verbose:
-        print(f"[MINIO] Clearing bucket: endpoint={MINIO_ENDPOINT}, bucket={bucket}")
+        logger.info(f"[MINIO] Clearing bucket: endpoint={MINIO_ENDPOINT}, bucket={bucket}")
     _ensure_public_bucket(client, bucket, verbose=verbose)
 
     deleted = 0
     for item in client.list_objects(bucket, recursive=True):
         if verbose:
-            print(f"[MINIO] Removing object: bucket={bucket}, object={item.object_name}")
+            logger.debug(f"[MINIO] Removing object: bucket={bucket}, object={item.object_name}")
         client.remove_object(bucket, item.object_name)
         deleted += 1
 
     if verbose:
-        print(f"[MINIO] Cleared bucket: bucket={bucket}, deleted={deleted}")
+        logger.info(f"[MINIO] Cleared bucket: bucket={bucket}, deleted={deleted}")
     return deleted
-
 
 def list_object_names(bucket=MINIO_BUCKET):
     client = _get_minio_client()

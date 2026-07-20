@@ -13,13 +13,14 @@ run_check() {
   log_file="$(mktemp "${TMPDIR:-/tmp}/${name}.XXXXXX.log")"
 
   echo "Checking ${name}..."
-  if "$PYTHON_BIN" - "$name" >"$log_file" 2>&1 <<'PY'
+  if export PYTHONPATH="$ROOT_DIR"; "$PYTHON_BIN" - "$name" >"$log_file" 2>&1 <<'PY'
 import sys
+import os
 
 check_name = sys.argv[1]
 
 if check_name == "postgres":
-    import db
+    from src.db import client as db
 
     kwargs = db._connection_kwargs()
     safe_kwargs = {key: value for key, value in kwargs.items() if key != "password"}
@@ -29,7 +30,7 @@ if check_name == "postgres":
     print(f"PostgreSQL connected: {result['version']}")
 
 elif check_name == "minio":
-    from minio_client import MINIO_BUCKET, MINIO_ENDPOINT, _get_minio_client
+    from src.utils.minio import MINIO_BUCKET, MINIO_ENDPOINT, _get_minio_client
 
     client = _get_minio_client()
     bucket_exists = client.bucket_exists(MINIO_BUCKET)
