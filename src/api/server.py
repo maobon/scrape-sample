@@ -50,7 +50,7 @@ def fetch_news_from_db(page: int, page_size: int):
             """
             SELECT id, title, url, image, img, summary, date
             FROM news
-            ORDER BY date DESC, id DESC
+            ORDER BY id ASC
             LIMIT %s OFFSET %s;
             """,
             (page_size, offset),

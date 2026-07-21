@@ -231,10 +231,49 @@ def ensure_news_id_column(cursor):
         """
     )
 
+def reset_news_id_sequence(cursor):
+    cursor.execute("SELECT pg_get_serial_sequence('news', 'id') AS sequence_name;")
+    row = cursor.fetchone()
+    sequence_name = row["sequence_name"] if row else None
+
+    if not sequence_name:
+        cursor.execute("CREATE SEQUENCE IF NOT EXISTS news_id_seq;")
+        cursor.execute("ALTER SEQUENCE news_id_seq OWNED BY news.id;")
+        cursor.execute("ALTER TABLE news ALTER COLUMN id SET DEFAULT nextval('news_id_seq');")
+        sequence_name = "news_id_seq"
+
+    cursor.execute("SELECT setval(%s::regclass, 1, false);", (sequence_name,))
+
+def compact_news_ids(cursor):
+    cursor.execute(
+        """
+        WITH numbered AS (
+            SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS new_id
+            FROM news
+        )
+        UPDATE news
+        SET id = -numbered.new_id
+        FROM numbered
+        WHERE news.id = numbered.id;
+        """
+    )
+    cursor.execute("UPDATE news SET id = -id WHERE id < 0;")
+    cursor.execute(
+        """
+        SELECT setval(
+            pg_get_serial_sequence('news', 'id')::regclass,
+            GREATEST(COALESCE(MAX(id), 0), 1),
+            COALESCE(MAX(id), 0) > 0
+        )
+        FROM news;
+        """
+    )
+
 def clear_news_table():
     create_news_table()
     with db_cursor(commit=True) as cursor:
         cursor.execute("TRUNCATE TABLE news RESTART IDENTITY;")
+        reset_news_id_sequence(cursor)
 
 def upsert_news(data):
     if not isinstance(data, list):
@@ -269,6 +308,7 @@ def upsert_news(data):
         inserted = []
         if rows:
             inserted = execute_values(cursor, sql_stmt, rows, fetch=True)
+            compact_news_ids(cursor)
         cursor.execute("SELECT COUNT(*) AS count FROM news;")
         result = cursor.fetchone()
         result["rows"] = inserted

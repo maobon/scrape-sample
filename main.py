@@ -29,7 +29,8 @@ async def main():
     parser.add_argument('--limit', help='Max results to collect (0 = all)', type=int, default=0)
     parser.add_argument('--json', help='Save output to JSON file path', default='out.json')
     parser.add_argument('--no-paginate', help='Disable pagination', action='store_true')
-    parser.add_argument('--clear-database', help='Clear DB before scraping', action='store_true')
+    parser.add_argument('--clear-database', help='Replace news table before saving scraped results', action='store_true', default=True)
+    parser.add_argument('--append-database', help='Do not clear news table before saving; update/append by URL', action='store_false', dest='clear_database')
     parser.add_argument('--clear-minio', help='Clear MinIO before scraping', action='store_true')
     
     args = parser.parse_args()

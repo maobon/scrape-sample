@@ -23,5 +23,10 @@
     "access_key": "minioadmin",
     "secret_key": "minioadmin",
     "secure": false
+  },
+  "img": {
+    "host": "127.0.0.1:9000",
+    "bucket": "img",
+    "scheme": "http"
   }
 }

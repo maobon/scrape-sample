@@ -12,10 +12,39 @@ from src.core.extractor import extract_from_item
 from src.core.downloader import download_images_async, get_image_filename
 from src.db.client import upsert_news, clear_news_table
 from src.utils.minio import clear_bucket
-from src.utils.network import get_local_ip
 from src.utils.config import load_app_config
 
 logger = logging.getLogger(__name__)
+
+def _bool_value(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).lower() in {"1", "true", "yes"}
+
+def get_base_img_url(config):
+    img_config = config.get('img') or {}
+    minio_config = config.get('minio') or {}
+
+    configured_base_url = os.getenv('IMG_BASE_URL') or img_config.get('base_url')
+    if configured_base_url:
+        return str(configured_base_url).rstrip('/')
+
+    host = os.getenv('IMG_HOST') or img_config.get('host') or minio_config.get('endpoint') or '127.0.0.1:9000'
+    bucket = os.getenv('IMG_BUCKET') or img_config.get('bucket') or minio_config.get('bucket') or 'img'
+    scheme = os.getenv('IMG_SCHEME') or img_config.get('scheme')
+    if not scheme:
+        secure = _bool_value(img_config.get('secure'), _bool_value(minio_config.get('secure'), False))
+        scheme = 'https' if secure else 'http'
+
+    host = str(host).strip().rstrip('/')
+    bucket = str(bucket).strip().strip('/')
+
+    if host.startswith(('http://', 'https://')):
+        return f"{host}/{bucket}" if bucket else host
+
+    return f"{scheme}://{host}/{bucket}" if bucket else f"{scheme}://{host}"
 
 async def fetch_soup(client, url):
     resp = await client.get(url, timeout=20)
@@ -32,13 +61,6 @@ def clear_output_state(args):
         if path.is_file() or path.is_symlink():
             path.unlink()
             deleted_images += 1
-
-    if args.clear_database:
-        try:
-            clear_news_table()
-            logger.info('Cleared PostgreSQL table news')
-        except Exception as e:
-            logger.error(f'Failed to clear PostgreSQL table news: {e}')
 
     if args.clear_minio:
         try:
@@ -148,8 +170,7 @@ async def run_scraper(args):
             f"{img_stats.get('upload_failed', 0)} upload failed."
         )
         
-        local_ip = get_local_ip()
-        base_img_url = f'http://{local_ip}:9000/img'
+        base_img_url = get_base_img_url(config)
         for item in results:
             orig_url = item.get('image')
             if orig_url and orig_url in url_map:
@@ -160,6 +181,10 @@ async def run_scraper(args):
 
         logger.info(f"Saving {len(results)} articles to Database...")
         try:
+            if args.clear_database:
+                clear_news_table()
+                logger.info('Cleared PostgreSQL table news and reset id sequence')
+
             db_result = upsert_news(results)
             logger.info(f"Database operation successful. Total rows in DB: {db_result['count']}")
         except Exception as e:
