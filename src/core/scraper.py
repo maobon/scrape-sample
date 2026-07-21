@@ -27,13 +27,16 @@ def get_base_img_url(config):
     img_config = config.get('img') or {}
     minio_config = config.get('minio') or {}
 
-    configured_base_url = os.getenv('IMG_BASE_URL') or img_config.get('base_url')
+    configured_base_url = img_config.get('base_url') or os.getenv('IMG_BASE_URL')
     if configured_base_url:
         return str(configured_base_url).rstrip('/')
 
-    host = os.getenv('IMG_HOST') or img_config.get('host') or minio_config.get('endpoint') or '127.0.0.1:9000'
-    bucket = os.getenv('IMG_BUCKET') or img_config.get('bucket') or minio_config.get('bucket') or 'img'
-    scheme = os.getenv('IMG_SCHEME') or img_config.get('scheme')
+    host = img_config.get('host') or os.getenv('IMG_HOST')
+    if not host:
+        raise ValueError('Missing config: img.host is required to build image URLs')
+
+    bucket = img_config.get('bucket') or os.getenv('IMG_BUCKET') or minio_config.get('bucket') or 'img'
+    scheme = img_config.get('scheme') or os.getenv('IMG_SCHEME')
     if not scheme:
         secure = _bool_value(img_config.get('secure'), _bool_value(minio_config.get('secure'), False))
         scheme = 'https' if secure else 'http'
