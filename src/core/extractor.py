@@ -3,9 +3,6 @@ from urllib.parse import urljoin, urlparse
 
 URL_BLACKLIST_SUBSTR = []
 DATA_TESTID_EXACT = {'live', 'interactive', 'load-more-posts', 'load-more'}
-ITEM_TEXT_BLACKLIST = {
-    'this was featured in live coverage.',
-}
 
 def is_supported_story_url(url):
     parsed = urlparse(url)
@@ -17,11 +14,6 @@ def is_supported_story_url(url):
 def is_unwanted_strict(title, href, item, title_blacklist=None):
     if not title:
         return True
-
-    item_text = item.get_text(' ', strip=True).lower()
-    for sub in ITEM_TEXT_BLACKLIST:
-        if sub in item_text:
-            return True
 
     href_l = (href or '').lower()
     for sub in URL_BLACKLIST_SUBSTR:
